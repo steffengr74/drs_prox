@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ClusterOverviewView: View {
     @EnvironmentObject var viewModel: ClusterViewModel
+    @Environment(\.windowScale) private var s
     @State private var showMaintenanceSheet = false
 
     var body: some View {
@@ -18,7 +19,7 @@ struct ClusterOverviewView: View {
             }
             .navigationTitle("Proxmox Cluster")
             .toolbar {
-                ToolbarItem(placement: .automatic) {
+                ToolbarItemGroup(placement: .primaryAction) {
                     Button {
                         Task { await viewModel.refreshUpdates() }
                     } label: {
@@ -30,8 +31,7 @@ struct ClusterOverviewView: View {
                     }
                     .disabled(viewModel.isCheckingUpdates || viewModel.nodes.isEmpty)
                     .help("Updates auf allen Hosts prüfen")
-                }
-                ToolbarItem(placement: .automatic) {
+
                     Button {
                         Task { await viewModel.refresh() }
                     } label: {
@@ -42,6 +42,7 @@ struct ClusterOverviewView: View {
                         }
                     }
                     .disabled(viewModel.isLoading)
+                    .help("Cluster-Daten neu laden")
                 }
             }
         }
@@ -58,17 +59,19 @@ struct ClusterOverviewView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 16 * s) {
             Image(systemName: viewModel.errorMessage != nil ? "exclamationmark.triangle" : "server.rack")
-                .font(.system(size: 52))
+                .font(.system(size: 52 * s))
                 .foregroundStyle(viewModel.errorMessage != nil ? Color.orange : Color.secondary)
             if let error = viewModel.errorMessage {
                 Text(error)
+                    .font(.system(size: 13 * s))
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal)
             } else {
                 Text("Einstellungen konfigurieren und Daten laden")
+                    .font(.system(size: 13 * s))
                     .foregroundStyle(.secondary)
             }
             Button("Aktualisieren") {
@@ -83,28 +86,31 @@ struct ClusterOverviewView: View {
 
     private var nodeList: some View {
         ScrollView {
-            LazyVStack(spacing: 12) {
+            VStack(spacing: 10 * s) {
                 if let error = viewModel.errorMessage {
                     HStack {
                         Image(systemName: "exclamationmark.circle")
-                        Text(error).font(.caption)
+                        Text(error).font(.system(size: 11 * s))
                     }
                     .foregroundStyle(.orange)
-                    .padding(.horizontal)
                 }
-                ForEach(viewModel.nodes) { node in
-                    NodeCard(
-                        node: node,
-                        vms: viewModel.vms(for: node),
-                        updateInfo: viewModel.nodeUpdates[node.name]
-                    ) {
-                        viewModel.startMaintenance(for: node.name)
-                        showMaintenanceSheet = true
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 360))],
+                    spacing: 12 * s
+                ) {
+                    ForEach(viewModel.nodes) { node in
+                        NodeCard(
+                            node: node,
+                            vms: viewModel.vms(for: node),
+                            updateInfo: viewModel.nodeUpdates[node.name]
+                        ) {
+                            viewModel.startMaintenance(for: node.name)
+                            showMaintenanceSheet = true
+                        }
                     }
-                    .padding(.horizontal)
                 }
             }
-            .padding(.vertical)
+            .padding(16 * s)
         }
     }
 }
@@ -115,9 +121,10 @@ struct NodeCard: View {
     let updateInfo: NodeUpdateInfo?
     let onMaintenance: () -> Void
     @State private var isExpanded = true
+    @Environment(\.windowScale) private var s
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 10 * s) {
             header
             resourceBars
             if isExpanded && !vms.isEmpty {
@@ -125,39 +132,39 @@ struct NodeCard: View {
                 vmList
             }
         }
-        .padding()
+        .padding(14 * s)
         .background(Color.gray.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .clipShape(RoundedRectangle(cornerRadius: 14 * s))
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 8 * s) {
             Circle()
                 .fill(node.isOnline ? Color.green : Color.red)
-                .frame(width: 10, height: 10)
+                .frame(width: 10 * s, height: 10 * s)
             VStack(alignment: .leading, spacing: 1) {
-                Text(node.name).font(.headline)
+                Text(node.name)
+                    .font(.system(size: 15 * s, weight: .semibold))
                 Text(node.isOnline ? "Online" : "Offline")
-                    .font(.caption2)
+                    .font(.system(size: 11 * s))
                     .foregroundStyle(node.isOnline ? Color.green : Color.red)
             }
             Spacer()
             Text("\(vms.count) VM\(vms.count == 1 ? "" : "s")")
-                .font(.caption)
+                .font(.system(size: 11 * s))
                 .foregroundStyle(.secondary)
 
             // Update count badge
             if let info = updateInfo, info.hasUpdates {
                 HStack(spacing: 3) {
                     Image(systemName: "arrow.down.circle.fill")
-                        .font(.caption2)
+                        .font(.system(size: 10 * s))
                     Text("\(info.updateCount)")
-                        .font(.caption2)
-                        .fontWeight(.semibold)
+                        .font(.system(size: 10 * s, weight: .semibold))
                 }
                 .foregroundStyle(.white)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
+                .padding(.horizontal, 6 * s)
+                .padding(.vertical, 3 * s)
                 .background(Color.orange)
                 .clipShape(Capsule())
                 .help("\(info.updateCount) Update\(info.updateCount == 1 ? "" : "s") verfügbar")
@@ -167,14 +174,13 @@ struct NodeCard: View {
             if let info = updateInfo, info.rebootRequired {
                 HStack(spacing: 3) {
                     Image(systemName: "restart.circle.fill")
-                        .font(.caption2)
+                        .font(.system(size: 10 * s))
                     Text("Neustart")
-                        .font(.caption2)
-                        .fontWeight(.semibold)
+                        .font(.system(size: 10 * s, weight: .semibold))
                 }
                 .foregroundStyle(.white)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
+                .padding(.horizontal, 6 * s)
+                .padding(.vertical, 3 * s)
                 .background(Color.red)
                 .clipShape(Capsule())
                 .help("Neustart nach Updates erforderlich")
@@ -186,7 +192,7 @@ struct NodeCard: View {
                     onMaintenance()
                 } label: {
                     Image(systemName: "wrench.adjustable")
-                        .font(.caption)
+                        .font(.system(size: 11 * s))
                         .foregroundStyle(.orange)
                 }
                 .buttonStyle(.plain)
@@ -197,7 +203,7 @@ struct NodeCard: View {
                 withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
             } label: {
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                    .font(.caption)
+                    .font(.system(size: 11 * s))
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
@@ -205,7 +211,7 @@ struct NodeCard: View {
     }
 
     private var resourceBars: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 8 * s) {
             ResourceBar(
                 label: "CPU",
                 value: node.cpuUsage,
@@ -222,7 +228,7 @@ struct NodeCard: View {
     }
 
     private var vmList: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 2 * s) {
             ForEach(vms) { vm in
                 VMRow(vm: vm)
             }
@@ -241,16 +247,17 @@ struct ResourceBar: View {
     let value: Double
     let detail: String
     let color: Color
+    @Environment(\.windowScale) private var s
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 4 * s) {
             HStack {
                 Text(label)
-                    .font(.caption)
+                    .font(.system(size: 11 * s))
                     .foregroundStyle(.secondary)
                 Spacer()
                 Text(detail)
-                    .font(.caption)
+                    .font(.system(size: 11 * s))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
@@ -264,32 +271,33 @@ struct ResourceBar: View {
                         .animation(.easeInOut, value: value)
                 }
             }
-            .frame(height: 7)
+            .frame(height: 7 * s)
         }
     }
 }
 
 struct VMRow: View {
     let vm: ProxmoxVM
+    @Environment(\.windowScale) private var s
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 8 * s) {
             Image(systemName: vm.isRunning ? "play.circle.fill" : "stop.circle.fill")
-                .font(.caption)
+                .font(.system(size: 11 * s))
                 .foregroundStyle(vm.isRunning ? Color.green : Color.gray)
             Text(vm.displayName)
-                .font(.subheadline)
+                .font(.system(size: 13 * s))
             Spacer()
             if vm.isRunning {
                 Text(String(format: "%.0f%%", vm.cpuUsage * 100))
-                    .font(.caption2)
+                    .font(.system(size: 10 * s))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
             Text("ID \(vm.id)")
-                .font(.caption2)
+                .font(.system(size: 10 * s))
                 .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, 1 * s)
     }
 }
