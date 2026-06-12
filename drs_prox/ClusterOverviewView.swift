@@ -1,9 +1,17 @@
 import SwiftUI
 
+private struct CardHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct ClusterOverviewView: View {
     @EnvironmentObject var viewModel: ClusterViewModel
     @Environment(\.windowScale) private var s
     @State private var showMaintenanceSheet = false
+    @State private var uniformCardHeight: CGFloat?
 
     var body: some View {
         NavigationStack {
@@ -107,7 +115,17 @@ struct ClusterOverviewView: View {
                             viewModel.startMaintenance(for: node.name)
                             showMaintenanceSheet = true
                         }
+                        .frame(minHeight: uniformCardHeight, alignment: .top)
+                        .background(GeometryReader { geo in
+                            Color.clear.preference(
+                                key: CardHeightKey.self,
+                                value: geo.size.height
+                            )
+                        })
                     }
+                }
+                .onPreferenceChange(CardHeightKey.self) { h in
+                    if h > 0 { uniformCardHeight = h }
                 }
             }
             .padding(16 * s)
