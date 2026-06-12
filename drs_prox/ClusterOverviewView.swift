@@ -110,12 +110,12 @@ struct ClusterOverviewView: View {
                         NodeCard(
                             node: node,
                             vms: viewModel.vms(for: node),
-                            updateInfo: viewModel.nodeUpdates[node.name]
+                            updateInfo: viewModel.nodeUpdates[node.name],
+                            fixedHeight: uniformCardHeight
                         ) {
                             viewModel.startMaintenance(for: node.name)
                             showMaintenanceSheet = true
                         }
-                        .frame(minHeight: uniformCardHeight, alignment: .top)
                         .background(GeometryReader { geo in
                             Color.clear.preference(
                                 key: CardHeightKey.self,
@@ -137,6 +137,7 @@ struct NodeCard: View {
     let node: ProxmoxNode
     let vms: [ProxmoxVM]
     let updateInfo: NodeUpdateInfo?
+    var fixedHeight: CGFloat? = nil
     let onMaintenance: () -> Void
     @State private var isExpanded = true
     @Environment(\.windowScale) private var s
@@ -151,6 +152,7 @@ struct NodeCard: View {
             }
         }
         .padding(14 * s)
+        .frame(maxWidth: .infinity, minHeight: fixedHeight, alignment: .top)
         .background(Color.gray.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 14 * s))
     }
@@ -305,6 +307,8 @@ struct VMRow: View {
                 .foregroundStyle(vm.isRunning ? Color.green : Color.gray)
             Text(vm.displayName)
                 .font(.system(size: 13 * s))
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
             Spacer()
             if vm.isRunning {
                 Text(String(format: "%.0f%%", vm.cpuUsage * 100))
