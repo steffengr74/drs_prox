@@ -12,6 +12,8 @@ struct ClusterOverviewView: View {
     @Environment(\.windowScale) private var s
     @State private var showMaintenanceSheet = false
     @State private var uniformCardHeight: CGFloat?
+    @State private var nodeToUpdate: String?
+    @State private var showUpdateWarning = false
 
     var body: some View {
         NavigationStack {
@@ -64,6 +66,15 @@ struct ClusterOverviewView: View {
                     .environmentObject(viewModel)
             }
         }
+        .alert("Neustart erforderlich", isPresented: $showUpdateWarning, presenting: nodeToUpdate) { nodeName in
+            Button("Abbrechen", role: .cancel) { nodeToUpdate = nil }
+            Button("Trotzdem installieren", role: .destructive) {
+                Task { await viewModel.installUpdates(for: nodeName) }
+                nodeToUpdate = nil
+            }
+        } message: { nodeName in
+            Text("Nach dem Einspielen der Updates auf \"\(nodeName)\" ist ein Neustart erforderlich. Laufende VMs auf diesem Host könnten beeinträchtigt werden.")
+        }
     }
 
     private var emptyState: some View {
@@ -111,11 +122,21 @@ struct ClusterOverviewView: View {
                             node: node,
                             vms: viewModel.vms(for: node),
                             updateInfo: viewModel.nodeUpdates[node.name],
-                            fixedHeight: uniformCardHeight
-                        ) {
-                            viewModel.startMaintenance(for: node.name)
-                            showMaintenanceSheet = true
-                        }
+                            fixedHeight: uniformCardHeight,
+                            updateProgress: viewModel.nodeUpdateProgress[node.name] ?? .idle,
+                            onMaintenance: {
+                                viewModel.startMaintenance(for: node.name)
+                                showMaintenanceSheet = true
+                            },
+                            onInstallUpdates: {
+                                if viewModel.nodeUpdates[node.name]?.rebootRequired == true {
+                                    nodeToUpdate = node.name
+                                    showUpdateWarning = true
+                                } else {
+                                    Task { await viewModel.installUpdates(for: node.name) }
+                                }
+                            }
+                        )
                         .background(GeometryReader { geo in
                             Color.clear.preference(
                                 key: CardHeightKey.self,
@@ -138,14 +159,24 @@ struct NodeCard: View {
     let vms: [ProxmoxVM]
     let updateInfo: NodeUpdateInfo?
     var fixedHeight: CGFloat? = nil
+    var updateProgress: NodeUpdateProgress = .idle
     let onMaintenance: () -> Void
+    var onInstallUpdates: () -> Void = {}
     @State private var isExpanded = true
     @Environment(\.windowScale) private var s
+
+    private var showUpdateSection: Bool {
+        (updateInfo?.hasUpdates ?? false) || updateProgress != .idle
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10 * s) {
             header
             resourceBars
+            if showUpdateSection {
+                Divider()
+                updateSection
+            }
             if isExpanded && !vms.isEmpty {
                 Divider()
                 vmList
@@ -155,6 +186,43 @@ struct NodeCard: View {
         .frame(maxWidth: .infinity, minHeight: fixedHeight, alignment: .top)
         .background(Color.gray.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 14 * s))
+    }
+
+    @ViewBuilder
+    private var updateSection: some View {
+        switch updateProgress {
+        case .idle:
+            if let info = updateInfo, info.hasUpdates, node.isOnline {
+                HStack {
+                    Label("\(info.updateCount) Update\(info.updateCount == 1 ? "" : "s") verfügbar",
+                          systemImage: "arrow.down.circle")
+                        .font(.system(size: 11 * s))
+                        .foregroundStyle(.orange)
+                    Spacer()
+                    Button("Installieren") { onInstallUpdates() }
+                        .font(.system(size: 11 * s, weight: .medium))
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            }
+        case .installing:
+            HStack {
+                Label("Updates werden installiert...", systemImage: "arrow.down.circle")
+                    .font(.system(size: 11 * s))
+                    .foregroundStyle(.blue)
+                Spacer()
+                ProgressView().controlSize(.small)
+            }
+        case .completed:
+            Label("Updates erfolgreich installiert", systemImage: "checkmark.circle.fill")
+                .font(.system(size: 11 * s))
+                .foregroundStyle(.green)
+        case .failed(let msg):
+            Label("Fehler: \(msg)", systemImage: "xmark.circle.fill")
+                .font(.system(size: 11 * s))
+                .foregroundStyle(.red)
+                .lineLimit(2)
+        }
     }
 
     private var header: some View {

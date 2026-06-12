@@ -59,6 +59,30 @@ struct NodeUpdateInfo {
     var hasUpdates: Bool { updateCount > 0 }
 }
 
+enum NodeUpdateProgress: Equatable {
+    case idle
+    case installing
+    case completed
+    case failed(String)
+
+    var isActive: Bool { self == .installing }
+
+    var isDone: Bool {
+        switch self {
+        case .completed, .failed: return true
+        default: return false
+        }
+    }
+
+    static func == (lhs: NodeUpdateProgress, rhs: NodeUpdateProgress) -> Bool {
+        switch (lhs, rhs) {
+        case (.idle, .idle), (.installing, .installing), (.completed, .completed): return true
+        case (.failed(let a), .failed(let b)): return a == b
+        default: return false
+        }
+    }
+}
+
 struct MigrationRecommendation: Identifiable {
     let id = UUID()
     let vm: ProxmoxVM

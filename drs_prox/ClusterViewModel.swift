@@ -20,6 +20,7 @@ final class ClusterViewModel: ObservableObject {
     // Update check state
     @Published var nodeUpdates: [String: NodeUpdateInfo] = [:]
     @Published var isCheckingUpdates = false
+    @Published var nodeUpdateProgress: [String: NodeUpdateProgress] = [:]
 
     // Maintenance mode state
     @Published var maintenanceMigrations: [MigrationRecommendation] = []
@@ -89,6 +90,29 @@ final class ClusterViewModel: ObservableObject {
             let count = (try? await c.fetchUpdateCount(node: node.name)) ?? 0
             let reboot = (try? await c.fetchRebootRequired(node: node.name)) ?? false
             nodeUpdates[node.name] = NodeUpdateInfo(updateCount: count, rebootRequired: reboot)
+        }
+    }
+
+    // Installs all pending updates on a node and polls until completion
+    func installUpdates(for nodeName: String) async {
+        nodeUpdateProgress[nodeName] = .installing
+        let c = client()
+        do {
+            let upid = try await c.installUpdates(node: nodeName)
+            for _ in 0..<120 {
+                try await Task.sleep(for: .seconds(5))
+                let result = try await c.fetchTaskStatus(node: nodeName, upid: upid)
+                if result.isFinished {
+                    nodeUpdateProgress[nodeName] = result.isSuccess ? .completed : .failed(result.exitStatus ?? "Unbekannter Fehler")
+                    let count = (try? await c.fetchUpdateCount(node: nodeName)) ?? 0
+                    let reboot = (try? await c.fetchRebootRequired(node: nodeName)) ?? false
+                    nodeUpdates[nodeName] = NodeUpdateInfo(updateCount: count, rebootRequired: reboot)
+                    return
+                }
+            }
+            nodeUpdateProgress[nodeName] = .failed("Timeout nach 10 Minuten")
+        } catch {
+            nodeUpdateProgress[nodeName] = .failed(error.localizedDescription)
         }
     }
 

@@ -147,6 +147,17 @@ final class ProxmoxAPIClient {
         return arr.count
     }
 
+    // Runs apt-get dist-upgrade on the node and returns the task UPID
+    func installUpdates(node: String) async throws -> String {
+        let req = try makeRequest(
+            path: "/nodes/\(node)/apt/update",
+            method: "POST",
+            formParams: ["upgrade": "1", "notify": "0"]
+        )
+        let res: PVEResponse<String> = try await perform(req)
+        return res.data
+    }
+
     // Returns true if the node requires a reboot after installed updates
     func fetchRebootRequired(node: String) async throws -> Bool {
         let req = try makeRequest(path: "/nodes/\(node)/reboot-required")
