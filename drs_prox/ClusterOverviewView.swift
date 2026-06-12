@@ -20,6 +20,19 @@ struct ClusterOverviewView: View {
             .toolbar {
                 ToolbarItem(placement: .automatic) {
                     Button {
+                        Task { await viewModel.refreshUpdates() }
+                    } label: {
+                        if viewModel.isCheckingUpdates {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label("Updates prüfen", systemImage: "arrow.down.circle")
+                        }
+                    }
+                    .disabled(viewModel.isCheckingUpdates || viewModel.nodes.isEmpty)
+                    .help("Updates auf allen Hosts prüfen")
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button {
                         Task { await viewModel.refresh() }
                     } label: {
                         if viewModel.isLoading {
@@ -80,7 +93,11 @@ struct ClusterOverviewView: View {
                     .padding(.horizontal)
                 }
                 ForEach(viewModel.nodes) { node in
-                    NodeCard(node: node, vms: viewModel.vms(for: node)) {
+                    NodeCard(
+                        node: node,
+                        vms: viewModel.vms(for: node),
+                        updateInfo: viewModel.nodeUpdates[node.name]
+                    ) {
                         viewModel.startMaintenance(for: node.name)
                         showMaintenanceSheet = true
                     }
@@ -95,6 +112,7 @@ struct ClusterOverviewView: View {
 struct NodeCard: View {
     let node: ProxmoxNode
     let vms: [ProxmoxVM]
+    let updateInfo: NodeUpdateInfo?
     let onMaintenance: () -> Void
     @State private var isExpanded = true
 
@@ -127,6 +145,40 @@ struct NodeCard: View {
             Text("\(vms.count) VM\(vms.count == 1 ? "" : "s")")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            // Update count badge
+            if let info = updateInfo, info.hasUpdates {
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.caption2)
+                    Text("\(info.updateCount)")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color.orange)
+                .clipShape(Capsule())
+                .help("\(info.updateCount) Update\(info.updateCount == 1 ? "" : "s") verfügbar")
+            }
+
+            // Reboot required badge
+            if let info = updateInfo, info.rebootRequired {
+                HStack(spacing: 3) {
+                    Image(systemName: "restart.circle.fill")
+                        .font(.caption2)
+                    Text("Neustart")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color.red)
+                .clipShape(Capsule())
+                .help("Neustart nach Updates erforderlich")
+            }
 
             // Maintenance mode button
             if node.isOnline {

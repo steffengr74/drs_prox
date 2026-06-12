@@ -52,6 +52,13 @@ struct ProxmoxVM: Identifiable, Hashable {
     }
 }
 
+struct NodeUpdateInfo {
+    let updateCount: Int
+    let rebootRequired: Bool
+
+    var hasUpdates: Bool { updateCount > 0 }
+}
+
 struct MigrationRecommendation: Identifiable {
     let id = UUID()
     let vm: ProxmoxVM

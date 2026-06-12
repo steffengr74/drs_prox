@@ -17,6 +17,10 @@ final class ClusterViewModel: ObservableObject {
         }
     }
 
+    // Update check state
+    @Published var nodeUpdates: [String: NodeUpdateInfo] = [:]
+    @Published var isCheckingUpdates = false
+
     // Maintenance mode state
     @Published var maintenanceMigrations: [MigrationRecommendation] = []
     @Published var evacuatingNode: String?
@@ -70,6 +74,20 @@ final class ClusterViewModel: ObservableObject {
             lastRefresh = Date()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    // Fetch available updates and reboot-required status for all online nodes
+    func refreshUpdates() async {
+        guard settings.isConfigured, !nodes.isEmpty else { return }
+        isCheckingUpdates = true
+        defer { isCheckingUpdates = false }
+
+        let c = client()
+        for node in nodes where node.isOnline {
+            let count = (try? await c.fetchUpdateCount(node: node.name)) ?? 0
+            let reboot = (try? await c.fetchRebootRequired(node: node.name)) ?? false
+            nodeUpdates[node.name] = NodeUpdateInfo(updateCount: count, rebootRequired: reboot)
         }
     }
 

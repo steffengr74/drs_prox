@@ -134,6 +134,31 @@ final class ProxmoxAPIClient {
         let res: PVEResponse<TaskStatusDTO> = try await perform(req)
         return TaskResult(status: res.data.status, exitStatus: res.data.exitstatus)
     }
+
+    // Returns number of available package updates for the node
+    func fetchUpdateCount(node: String) async throws -> Int {
+        let req = try makeRequest(path: "/nodes/\(node)/apt/update")
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+            return 0
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let arr = json["data"] as? [Any] else { return 0 }
+        return arr.count
+    }
+
+    // Returns true if the node requires a reboot after installed updates
+    func fetchRebootRequired(node: String) async throws -> Bool {
+        let req = try makeRequest(path: "/nodes/\(node)/reboot-required")
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+            return false
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        if let val = json["data"] as? Int  { return val != 0 }
+        if let val = json["data"] as? Bool { return val }
+        return false
+    }
 }
 
 // MARK: - DTOs
