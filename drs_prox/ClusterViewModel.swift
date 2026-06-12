@@ -72,6 +72,7 @@ final class ClusterViewModel: ObservableObject {
             vms = allVMs
             recommendations = drsEngine.generateRecommendations(nodes: nodes, vms: vms)
             lastRefresh = Date()
+            await refreshUpdates()
         } catch {
             errorMessage = error.localizedDescription
         }
