@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var localTokenID = ""
     @State private var localTokenSecret = ""
     @State private var localVerifyCert = false
+    @State private var localAutoRefresh: AutoRefreshInterval = .off
     @State private var isDirty = false
 
     var canConnect: Bool {
@@ -19,6 +20,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             connectionSection
+            autoRefreshSection
             drsSection
             actionSection
 
@@ -86,6 +88,28 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
         }
     }
+    
+    private var autoRefreshSection: some View {
+        Section("Automatische Aktualisierung") {
+            Picker("Intervall", selection: $localAutoRefresh) {
+                ForEach(AutoRefreshInterval.allCases, id: \.self) { interval in
+                    Text(interval.label).tag(interval)
+                }
+            }
+            .onChange(of: localAutoRefresh) { _, _ in isDirty = true }
+            .pickerStyle(.segmented)
+            
+            if localAutoRefresh != .off {
+                HStack {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.blue)
+                    Text("Daten werden automatisch alle \(localAutoRefresh.rawValue) Sekunden aktualisiert")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
 
     private var drsSection: some View {
         Section("DRS Parameter") {
@@ -144,6 +168,7 @@ struct SettingsView: View {
         localTokenID = viewModel.settings.tokenID
         localTokenSecret = viewModel.settings.tokenSecret
         localVerifyCert = viewModel.settings.verifyCertificate
+        localAutoRefresh = viewModel.settings.autoRefreshInterval
         isDirty = false
     }
 
@@ -154,6 +179,7 @@ struct SettingsView: View {
         s.tokenID = localTokenID
         s.tokenSecret = localTokenSecret
         s.verifyCertificate = localVerifyCert
+        s.autoRefreshInterval = localAutoRefresh
         viewModel.settings = s
         isDirty = false
     }

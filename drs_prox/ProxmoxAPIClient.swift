@@ -83,7 +83,7 @@ final class ProxmoxAPIClient {
     func fetchNodes() async throws -> [ProxmoxNode] {
         let req = try makeRequest(path: "/nodes")
         let res: PVEResponse<[NodeDTO]> = try await perform(req)
-        return res.data.map { dto in
+        var nodes = res.data.map { dto in
             ProxmoxNode(
                 id: dto.node,
                 name: dto.node,
@@ -95,8 +95,144 @@ final class ProxmoxAPIClient {
                 uptime: dto.uptime ?? 0
             )
         }
+        
+        // Fetch network interfaces for each online node
+        for i in nodes.indices where nodes[i].isOnline {
+            if let interfaces = try? await fetchNetworkInterfaces(node: nodes[i].name) {
+                nodes[i].networkInterfaces = interfaces
+            }
+        }
+        
+        return nodes
     }
+    
+    func fetchNetworkInterfaces(node: String) async throws -> [NetworkInterface] {
+        // First, get the list of network interfaces from the network config
+        let netReq = try makeRequest(path: "/nodes/\(node)/network")
+        
+        let (data, response) = try await session.data(for: netReq)
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.httpError(0, "Keine HTTP-Antwort")
+        }
+        guard 200..<300 ~= http.statusCode else {
+            let msg = String(data: data, encoding: .utf8) ?? "Unbekannter Fehler"
+            throw APIError.httpError(http.statusCode, msg)
+        }
+        
+        // Try to parse as flexible JSON
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let dataArray = json["data"] as? [[String: Any]] else {
+            return []
+        }
+        
+        var interfaces: [NetworkInterface] = []
 
+        // First pass: build a map of bond -> slave-list so we can attribute slaves to their master.
+        var slavesByBond: [String: [String]] = [:]
+        var masterBySlave: [String: String] = [:]
+        for item in dataArray {
+            guard let iface = item["iface"] as? String,
+                  (item["type"] as? String) == "bond" else { continue }
+            let raw = (item["slaves"] as? String) ?? (item["bond_slaves"] as? String) ?? ""
+            let slaves = raw.split(whereSeparator: { $0 == " " || $0 == "," })
+                .map(String.init)
+                .filter { !$0.isEmpty }
+            slavesByBond[iface] = slaves
+            for s in slaves { masterBySlave[s] = iface }
+        }
+
+        // Manually parse each interface config
+        for item in dataArray {
+            guard let iface = item["iface"] as? String else { continue }
+
+            // Accept physical NICs (en*, eth*, nic*) and bonds
+            let isPhysical = (iface.hasPrefix("en") || iface.hasPrefix("eth") || iface.hasPrefix("nic"))
+                && !iface.hasPrefix("veth")
+            let isBond = iface.hasPrefix("bond")
+            guard isPhysical || isBond else { continue }
+
+            let type = item["type"] as? String
+            guard type != "bridge" else { continue }
+
+            let active = (item["active"] as? Int == 1) || (item["active"] as? Bool == true)
+            let speed = item["speed"] as? Int64
+            let kind: NetworkInterface.Kind = isBond ? .bond : .physical
+            let slaves = slavesByBond[iface] ?? []
+            let bondMaster = masterBySlave[iface]
+            
+            // Get RRD data for this interface
+            do {
+                let rrdReq = try makeRequest(path: "/nodes/\(node)/rrddata?timeframe=hour&cf=AVERAGE")
+                let (rrdData, rrdResponse) = try await session.data(for: rrdReq)
+                
+                guard let rrdHttp = rrdResponse as? HTTPURLResponse, 200..<300 ~= rrdHttp.statusCode else {
+                    throw APIError.httpError(0, "RRD request failed")
+                }
+                
+                guard let rrdJson = try? JSONSerialization.jsonObject(with: rrdData) as? [String: Any],
+                      let rrdArray = rrdJson["data"] as? [[String: Any]],
+                      let latest = rrdArray.last else {
+                    throw APIError.decodingError("No RRD data")
+                }
+                
+                // Look for interface-specific keys first (e.g., "netin:bond0")
+                let netinKey = "netin:\(iface)"
+                let netoutKey = "netout:\(iface)"
+                
+                var rxBytes = (latest[netinKey] as? Double) ?? 0
+                var txBytes = (latest[netoutKey] as? Double) ?? 0
+                
+                // If interface-specific keys don't exist, use the generic netin/netout
+                if rxBytes == 0 && txBytes == 0 {
+                    // For bonds, use the total network traffic
+                    rxBytes = (latest["netin"] as? Double) ?? 0
+                    txBytes = (latest["netout"] as? Double) ?? 0
+                    
+                    // If we have multiple interfaces, divide by the count for approximation
+                    let interfaceCount = dataArray.filter { item in
+                        guard let ifaceName = item["iface"] as? String else { return false }
+                        return (ifaceName.hasPrefix("en") || ifaceName.hasPrefix("eth") || ifaceName.hasPrefix("bond")) &&
+                               !ifaceName.hasPrefix("veth") &&
+                               (item["type"] as? String) != "bridge"
+                    }.count
+                    
+                    if interfaceCount > 1 {
+                        rxBytes = rxBytes / Double(interfaceCount)
+                        txBytes = txBytes / Double(interfaceCount)
+                    }
+                }
+                
+                interfaces.append(NetworkInterface(
+                    id: iface,
+                    name: iface,
+                    rxBytes: Int64(rxBytes),
+                    txBytes: Int64(txBytes),
+                    speed: speed,
+                    isActive: active,
+                    kind: kind,
+                    slaves: slaves,
+                    bondMaster: bondMaster
+                ))
+
+            } catch {
+                // If RRD fetch fails, add interface with zero stats
+                interfaces.append(NetworkInterface(
+                    id: iface,
+                    name: iface,
+                    rxBytes: 0,
+                    txBytes: 0,
+                    speed: speed,
+                    isActive: active,
+                    kind: kind,
+                    slaves: slaves,
+                    bondMaster: bondMaster
+                ))
+            }
+        }
+        
+        return interfaces.sorted { $0.name < $1.name }
+    }
+    
     func fetchVMs(on node: String) async throws -> [ProxmoxVM] {
         let req = try makeRequest(path: "/nodes/\(node)/qemu")
         let res: PVEResponse<[VMDTO]> = try await perform(req)
@@ -203,3 +339,23 @@ private struct TaskStatusDTO: Decodable {
     let status: String
     let exitstatus: String?
 }
+
+private struct NodeStatusDTO: Decodable {
+    let netin: [String: Double]?
+    let netout: [String: Double]?
+}
+
+private struct NetworkConfigDTO: Decodable {
+    let iface: String?
+    let type: String?
+    let active: Bool?
+    let speed: Int64?
+    let address: String?
+    let netmask: String?
+    let gateway: String?
+}
+
+private struct NetworkInterfaceDetailDTO: Decodable {
+    let speed: Int64?
+}
+

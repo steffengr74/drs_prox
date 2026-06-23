@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 private struct CardHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
@@ -14,6 +15,8 @@ struct ClusterOverviewView: View {
     @State private var uniformCardHeight: CGFloat?
     @State private var nodeToUpdate: String?
     @State private var showUpdateWarning = false
+    @State private var nextRefreshDate: Date?
+    @State private var refreshTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         NavigationStack {
@@ -30,6 +33,22 @@ struct ClusterOverviewView: View {
             .navigationTitle("Proxmox Cluster")
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
+                    // Auto-refresh indicator
+                    if viewModel.settings.autoRefreshInterval != .off, let nextRefresh = nextRefreshDate {
+                        let remaining = Int(nextRefresh.timeIntervalSinceNow)
+                        if remaining > 0 {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.clockwise.circle.fill")
+                                    .foregroundStyle(.green)
+                                Text("\(remaining)s")
+                                    .monospacedDigit()
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .help("Nächste automatische Aktualisierung in \(remaining) Sekunden")
+                        }
+                    }
+                    
                     Button {
                         Task { await viewModel.refreshUpdates() }
                     } label: {
@@ -43,7 +62,10 @@ struct ClusterOverviewView: View {
                     .help("Updates auf allen Hosts prüfen")
 
                     Button {
-                        Task { await viewModel.refresh() }
+                        Task { 
+                            await viewModel.refresh()
+                            updateNextRefreshDate()
+                        }
                     } label: {
                         if viewModel.isLoading {
                             ProgressView().controlSize(.small)
@@ -54,6 +76,12 @@ struct ClusterOverviewView: View {
                     .disabled(viewModel.isLoading)
                     .help("Cluster-Daten neu laden")
                 }
+            }
+            .onReceive(refreshTimer) { _ in
+                updateNextRefreshDate()
+            }
+            .onAppear {
+                updateNextRefreshDate()
             }
         }
         .sheet(isPresented: $showMaintenanceSheet, onDismiss: {
@@ -152,6 +180,15 @@ struct ClusterOverviewView: View {
             .padding(16 * s)
         }
     }
+    
+    private func updateNextRefreshDate() {
+        guard let interval = viewModel.settings.autoRefreshInterval.seconds,
+              let lastRefresh = viewModel.lastRefresh else {
+            nextRefreshDate = nil
+            return
+        }
+        nextRefreshDate = lastRefresh.addingTimeInterval(interval)
+    }
 }
 
 struct NodeCard: View {
@@ -173,6 +210,10 @@ struct NodeCard: View {
         VStack(alignment: .leading, spacing: 10 * s) {
             header
             resourceBars
+            if !node.networkInterfaces.isEmpty {
+                Divider()
+                NetworkInterfaceView(interfaces: node.networkInterfaces)
+            }
             if showUpdateSection {
                 Divider()
                 updateSection
@@ -181,6 +222,9 @@ struct NodeCard: View {
                 Divider()
                 vmList
             }
+            
+            // Spacer to push content to the top when card is stretched
+            Spacer(minLength: 0)
         }
         .padding(14 * s)
         .frame(maxWidth: .infinity, minHeight: fixedHeight, alignment: .top)
@@ -233,69 +277,79 @@ struct NodeCard: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(node.name)
                     .font(.system(size: 15 * s, weight: .semibold))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(node.isOnline ? "Online" : "Offline")
                     .font(.system(size: 11 * s))
                     .foregroundStyle(node.isOnline ? Color.green : Color.red)
             }
-            Spacer()
-            Text("\(vms.count) VM\(vms.count == 1 ? "" : "s")")
-                .font(.system(size: 11 * s))
-                .foregroundStyle(.secondary)
-
-            // Update count badge
-            if let info = updateInfo, info.hasUpdates {
-                HStack(spacing: 3) {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .font(.system(size: 10 * s))
-                    Text("\(info.updateCount)")
-                        .font(.system(size: 10 * s, weight: .semibold))
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 6 * s)
-                .padding(.vertical, 3 * s)
-                .background(Color.orange)
-                .clipShape(Capsule())
-                .help("\(info.updateCount) Update\(info.updateCount == 1 ? "" : "s") verfügbar")
-            }
-
-            // Reboot required badge
-            if let info = updateInfo, info.rebootRequired {
-                HStack(spacing: 3) {
-                    Image(systemName: "restart.circle.fill")
-                        .font(.system(size: 10 * s))
-                    Text("Neustart")
-                        .font(.system(size: 10 * s, weight: .semibold))
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 6 * s)
-                .padding(.vertical, 3 * s)
-                .background(Color.red)
-                .clipShape(Capsule())
-                .help("Neustart nach Updates erforderlich")
-            }
-
-            // Maintenance mode button
-            if node.isOnline {
-                Button {
-                    onMaintenance()
-                } label: {
-                    Image(systemName: "wrench.adjustable")
-                        .font(.system(size: 11 * s))
-                        .foregroundStyle(.orange)
-                }
-                .buttonStyle(.plain)
-                .help("Wartungsmodus: Alle VMs von diesem Host evakuieren")
-            }
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
-            } label: {
-                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            
+            Spacer(minLength: 4 * s)
+            
+            VStack(alignment: .trailing, spacing: 2 * s) {
+                Text("\(vms.count) VM\(vms.count == 1 ? "" : "s")")
                     .font(.system(size: 11 * s))
                     .foregroundStyle(.secondary)
+                
+                HStack(spacing: 4 * s) {
+                    // Update count badge
+                    if let info = updateInfo, info.hasUpdates {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.system(size: 10 * s))
+                            Text("\(info.updateCount)")
+                                .font(.system(size: 10 * s, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6 * s)
+                        .padding(.vertical, 3 * s)
+                        .background(Color.orange)
+                        .clipShape(Capsule())
+                        .help("\(info.updateCount) Update\(info.updateCount == 1 ? "" : "s") verfügbar")
+                    }
+
+                    // Reboot required badge
+                    if let info = updateInfo, info.rebootRequired {
+                        HStack(spacing: 3) {
+                            Image(systemName: "restart.circle.fill")
+                                .font(.system(size: 10 * s))
+                            Text("Neustart")
+                                .font(.system(size: 10 * s, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6 * s)
+                        .padding(.vertical, 3 * s)
+                        .background(Color.red)
+                        .clipShape(Capsule())
+                        .help("Neustart nach Updates erforderlich")
+                    }
+
+                    // Maintenance mode button
+                    if node.isOnline {
+                        Button {
+                            onMaintenance()
+                        } label: {
+                            Image(systemName: "wrench.adjustable")
+                                .font(.system(size: 11 * s))
+                                .foregroundStyle(.orange)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Wartungsmodus: Alle VMs von diesem Host evakuieren")
+                    }
+
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+                    } label: {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 11 * s))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .buttonStyle(.plain)
         }
+        .frame(minHeight: 40 * s)
     }
 
     private var resourceBars: some View {
@@ -316,7 +370,7 @@ struct NodeCard: View {
     }
 
     private var vmList: some View {
-        VStack(spacing: 2 * s) {
+        VStack(spacing: 1 * s) {
             ForEach(vms) { vm in
                 VMRow(vm: vm)
             }
@@ -369,25 +423,25 @@ struct VMRow: View {
     @Environment(\.windowScale) private var s
 
     var body: some View {
-        HStack(spacing: 8 * s) {
+        HStack(spacing: 6 * s) {
             Image(systemName: vm.isRunning ? "play.circle.fill" : "stop.circle.fill")
-                .font(.system(size: 11 * s))
+                .font(.system(size: 9 * s))
                 .foregroundStyle(vm.isRunning ? Color.green : Color.gray)
             Text(vm.displayName)
-                .font(.system(size: 13 * s))
+                .font(.system(size: 11 * s))
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
             Spacer()
             if vm.isRunning {
                 Text(String(format: "%.0f%%", vm.cpuUsage * 100))
-                    .font(.system(size: 10 * s))
+                    .font(.system(size: 9 * s))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
             Text("ID \(vm.id)")
-                .font(.system(size: 10 * s))
+                .font(.system(size: 9 * s))
                 .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 1 * s)
+        .padding(.vertical, 0)
     }
 }

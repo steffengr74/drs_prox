@@ -14,6 +14,7 @@ final class ClusterViewModel: ObservableObject {
         didSet {
             saveSettings()
             apiClient = nil
+            setupAutoRefresh()
         }
     }
 
@@ -30,6 +31,9 @@ final class ClusterViewModel: ObservableObject {
     private var apiClient: ProxmoxAPIClient?
     private let drsEngine = DRSEngine()
     private static let settingsKey = "proxmox_settings_v1"
+    
+    // Auto-refresh timer
+    private var autoRefreshTask: Task<Void, Never>?
 
     init() {
         if let data = UserDefaults.standard.data(forKey: Self.settingsKey),
@@ -37,6 +41,27 @@ final class ClusterViewModel: ObservableObject {
             settings = saved
         } else {
             settings = ProxmoxSettings()
+        }
+        setupAutoRefresh()
+    }
+    
+    deinit {
+        autoRefreshTask?.cancel()
+    }
+    
+    private func setupAutoRefresh() {
+        // Cancel existing timer
+        autoRefreshTask?.cancel()
+        
+        // Setup new timer if needed
+        guard let interval = settings.autoRefreshInterval.seconds else { return }
+        
+        autoRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(interval))
+                guard !Task.isCancelled else { break }
+                await self?.refresh()
+            }
         }
     }
 
